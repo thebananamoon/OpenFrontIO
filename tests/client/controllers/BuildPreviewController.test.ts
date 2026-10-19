@@ -1,3 +1,5 @@
+import { UnitType } from "@openfront/engine-api/game/GameTypes";
+import { EventBus } from "@openfront/shared/EventBus";
 import { describe, expect, test, vi } from "vitest";
 import {
   BuildPreviewController,
@@ -6,8 +8,6 @@ import {
 } from "../../../src/client/controllers/BuildPreviewController";
 import { MouseUpEvent } from "../../../src/client/InputHandler";
 import { BuildUnitIntentEvent } from "../../../src/client/Transport";
-import { EventBus } from "../../../src/core/EventBus";
-import { UnitType } from "../../../src/core/game/Game";
 
 describe("BuildPreviewController ghost preservation (locked nuke / Enter confirm)", () => {
   describe("shouldPreserveGhostAfterBuild", () => {
@@ -78,7 +78,7 @@ describe("samThreatensNukePreview (nuke trajectory threat set, #4226)", () => {
 });
 
 describe("BuildPreviewController confirm with the pointer off the map", () => {
-  function makeController(worldX: number, worldY: number) {
+  function makeController(worldX: number, worldY: number, snap = false) {
     const width = 10;
     const height = 10;
     const game = {
@@ -90,12 +90,18 @@ describe("BuildPreviewController confirm with the pointer off the map", () => {
         }
         return y * width + x;
       },
-      myPlayer: () => null,
+      myPlayer: () => ({ gold: () => 100n, smallID: () => 1 }),
+      x: (t: number) => t % width,
+      y: (t: number) => Math.floor(t / width),
     };
     const transformHandler = {
       screenToWorldCoordinates: () => ({ x: worldX, y: worldY }),
     };
-    const userSettings = { nukeAllianceSafetyDuration: () => 0 };
+    const userSettings = {
+      nukeAllianceSafetyDuration: () => 0,
+      cursorCostLabel: () => false,
+      snapBuildPreview: () => snap,
+    };
     const eventBus = new EventBus();
     const emitted: unknown[] = [];
     vi.spyOn(eventBus, "emit").mockImplementation((e) => {
@@ -114,6 +120,30 @@ describe("BuildPreviewController confirm with the pointer off the map", () => {
     };
     return { controller, emitted };
   }
+
+  test.each([UnitType.City, UnitType.Port, UnitType.Warship])(
+    "snapped preview for %s",
+    (type) => {
+      const { controller } = makeController(3, 4, true);
+      const buildable = (controller as any).ghostUnit.buildableUnit;
+      Object.assign(buildable, { type, canBuild: 0, cost: 1n });
+      const data = (controller as any).buildGhostPreviewData(43, false);
+      const position = type === UnitType.Warship ? [3, 4] : [0, 0];
+      expect([data.tileX, data.tileY]).toEqual(position);
+      expect([data.radiusTileX, data.radiusTileY]).toEqual(position);
+      expect(data.snapToPlacement).toBe(type !== UnitType.Warship);
+    },
+  );
+
+  test("preview stays under the cursor when snapping is off", () => {
+    const { controller } = makeController(3, 4);
+    const buildable = (controller as any).ghostUnit.buildableUnit;
+    Object.assign(buildable, { type: UnitType.City, canBuild: 0, cost: 1n });
+    const data = (controller as any).buildGhostPreviewData(43, false);
+    expect([data.tileX, data.tileY]).toEqual([3, 4]);
+    expect([data.radiusTileX, data.radiusTileY]).toEqual([3, 4]);
+    expect(data.snapToPlacement).toBe(false);
+  });
 
   test("does not throw or emit a build intent when released off the map edge", () => {
     const { controller, emitted } = makeController(-1, 4);
